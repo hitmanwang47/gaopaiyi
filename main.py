@@ -33,7 +33,7 @@ def _camera_backend():
 def _open_with_default_app(path):
     """用系统默认程序打开文件或目录（跨平台）。"""
     if os.name == "nt":
-        _open_with_default_app(path)
+        os.startfile(path)
     elif sys.platform == "darwin":
         subprocess.Popen(["open", path])
     else:
