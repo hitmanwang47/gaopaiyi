@@ -25,13 +25,39 @@ pip install -r requirements.txt
 
 ## 启动
 
-双击 `run.bat`，或手动执行：
+Windows：双击 `run.bat`，或手动执行：
 
 ```bash
 python main.py
 ```
 
+Linux/macOS：使用 `run.sh`（无需可执行权限，直接 `bash run.sh`），或手动执行：
+
+```bash
+python3 main.py
+```
+
 拍摄的图片默认保存在 `captures` 目录，可在界面中更改保存目录。
+
+## Linux 依赖说明
+
+安装 Python 依赖：
+
+```bash
+pip install -r requirements.txt
+```
+
+若 PyQt5 / OpenCV 启动报缺库（如 `libGL`、`libxcb-cursor`），Debian/Ubuntu 可先安装：
+
+```bash
+sudo apt install libgl1 libegl1 libxcb-cursor0 libxkbcommon-x11-0
+```
+
+摄像头访问：若提示无法打开 `/dev/video*`，将当前用户加入 `video` 组后重新登录：
+
+```bash
+sudo usermod -aG video $USER
+```
 
 ## 文档检测说明
 

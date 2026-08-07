@@ -1,6 +1,7 @@
 """高拍仪应用：选择摄像头 -> 实时预览(自动框出文档) -> 拍摄 -> 记录列表与缩略图。"""
 
 import os
+import subprocess
 import sys
 import time
 
@@ -24,12 +25,27 @@ COMMON_RESOLUTIONS = [
 ]
 
 
+def _camera_backend():
+    """Windows 用 DirectShow，Linux/macOS 用系统默认后端。"""
+    return cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
+
+
+def _open_with_default_app(path):
+    """用系统默认程序打开文件或目录（跨平台）。"""
+    if os.name == "nt":
+        _open_with_default_app(path)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
 # ---------- 摄像头枚举 ----------
 def list_cameras(max_index=9):
     """探测可用摄像头，返回 [(索引, 显示名)]。"""
     available = []
     for i in range(max_index + 1):
-        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(i, _camera_backend())
         if not cap.isOpened():
             cap = cv2.VideoCapture(i)
         if cap.isOpened():
@@ -42,7 +58,7 @@ def list_resolutions(camera_index):
     """探测摄像头支持的常见分辨率列表。"""
     supported = []
     for w, h in COMMON_RESOLUTIONS:
-        cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(camera_index, _camera_backend())
         if not cap.isOpened():
             cap = cv2.VideoCapture(camera_index)
         if not cap.isOpened():
@@ -92,7 +108,7 @@ class CameraWorker(QThread):
         return dist < 0.06 and ratio < 1.6
 
     def run(self):
-        cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(self.camera_index, _camera_backend())
         if not cap.isOpened():
             cap = cv2.VideoCapture(self.camera_index)
         if not cap.isOpened():
@@ -613,7 +629,7 @@ class MainWindow(QMainWindow):
     def open_record(self, item):
         path = item.data(Qt.UserRole)
         if path and os.path.exists(path):
-            os.startfile(path)  # noqa
+            _open_with_default_app(path)
 
     # ---------- 目录 ----------
     def choose_dir(self):
@@ -624,7 +640,7 @@ class MainWindow(QMainWindow):
 
     def open_dir(self):
         os.makedirs(self.output_dir, exist_ok=True)
-        os.startfile(self.output_dir)  # noqa
+        _open_with_default_app(self.output_dir)
 
     # ---------- 关闭 ----------
     def closeEvent(self, event):
