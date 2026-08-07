@@ -59,6 +59,30 @@ sudo apt install libgl1 libegl1 libxcb-cursor0 libxkbcommon-x11-0
 sudo usermod -aG video $USER
 ```
 
+## ARM 架构 Linux（aarch64）运行说明
+
+代码本身无平台限制，可在 64 位 ARM Linux（如树莓派 4/5、香橙派、飞腾等，运行 Debian/Ubuntu 等 glibc 发行版）上运行。依赖注意事项：
+
+- `opencv-python`、`numpy` 在 PyPI 上有 aarch64 预编译轮子，可直接安装；
+- `PyQt5` 官方 PyPI **没有 aarch64 轮子**，直接用 `pip install -r requirements.txt` 会尝试源码编译而失败，需改用系统包管理器安装；
+- 需要桌面环境（X11/Wayland）才能显示界面；摄像头权限见上面的“Linux 依赖说明”。
+
+Debian/Ubuntu 安装步骤：
+
+```bash
+# 1. 用系统包安装 PyQt5（arm64 预编译包）
+sudo apt update
+sudo apt install python3-pyqt5
+# 2. 其余依赖从 pip 安装（忽略 requirements.txt 中的 PyQt5）
+pip install numpy==2.0.1 opencv-python==4.12.0.88
+```
+
+> `requirements.txt` 中的 `PyQt5==5.15.9` 在 aarch64 上请忽略，系统 `python3-pyqt5` 通常为 5.15.x，API 兼容，代码无需改动。
+
+树莓派（Raspberry Pi OS）：系统默认启用 piwheels 源，可直接 `pip install PyQt5==5.15.9 opencv-python==4.12.0.88`。
+
+32 位 ARM（armv7/armhf）没有官方预编译轮子，需要从源码构建，不建议使用。
+
 ## 文档检测说明
 
 `detector.py` 采用“阈值分割（Otsu / 自适应阈值）+ 最大连通区域 + 四边形拟合”的策略，
