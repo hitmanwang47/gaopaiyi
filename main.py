@@ -52,9 +52,12 @@ def list_resolutions(camera_index):
         return supported
     try:
         for w, h in COMMON_RESOLUTIONS:
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-            ok, frame = cap.read()
+            _safe_set(cap, cv2.CAP_PROP_FRAME_WIDTH, w)
+            _safe_set(cap, cv2.CAP_PROP_FRAME_HEIGHT, h)
+            try:
+                ok, frame = cap.read()
+            except cv2.error:
+                continue
             if not ok or frame is None:
                 continue
             fh, fw = frame.shape[:2]
@@ -65,13 +68,30 @@ def list_resolutions(camera_index):
     return supported
 
 
+def _safe_set(cap, prop, value):
+    """设置摄像头属性；部分驱动/分辨率组合会抛异常，此处忽略。"""
+    try:
+        cap.set(prop, value)
+        return True
+    except cv2.error:
+        return False
+
+
+def _safe_get(cap, prop):
+    """读取摄像头属性；异常时返回 None。"""
+    try:
+        return cap.get(prop)
+    except cv2.error:
+        return None
+
+
 def _probe_range(cap, prop):
     """探测摄像头某个属性（亮度/对比度/饱和度）的实际取值范围。"""
     values = []
     for v in (0, 64, 128, 192, 255):
-        cap.set(prop, v)
+        _safe_set(cap, prop, v)
         time.sleep(0.03)
-        gv = cap.get(prop)
+        gv = _safe_get(cap, prop)
         if gv is not None and gv >= 0:
             values.append(gv)
     if len(values) < 2:
@@ -123,20 +143,20 @@ class CameraWorker(QThread):
             self.camera_error.emit("无法打开摄像头（索引 %d）" % self.camera_index)
             return
         if self.resolution:
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+            _safe_set(cap, cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
+            _safe_set(cap, cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
 
         # 关闭自动曝光/白平衡/对焦，避免手动参数被自动模式覆盖（部分 OpenCV 版本缺少 AUTO_FOCUS/AUTO_SHARPNESS）
         for auto_name in ("CAP_PROP_AUTO_EXPOSURE", "CAP_PROP_AUTO_WB",
                           "CAP_PROP_AUTO_FOCUS", "CAP_PROP_AUTO_SHARPNESS"):
             auto_prop = getattr(cv2, auto_name, None)
             if auto_prop is not None:
-                cap.set(auto_prop, 0)
+                _safe_set(cap, auto_prop, 0)
 
         original = {
-            "brightness": cap.get(cv2.CAP_PROP_BRIGHTNESS),
-            "contrast": cap.get(cv2.CAP_PROP_CONTRAST),
-            "saturation": cap.get(cv2.CAP_PROP_SATURATION),
+            "brightness": _safe_get(cap, cv2.CAP_PROP_BRIGHTNESS),
+            "contrast": _safe_get(cap, cv2.CAP_PROP_CONTRAST),
+            "saturation": _safe_get(cap, cv2.CAP_PROP_SATURATION),
         }
         ranges = {
             "brightness": _probe_range(cap, cv2.CAP_PROP_BRIGHTNESS),
@@ -149,7 +169,7 @@ class CameraWorker(QThread):
                            ("saturation", cv2.CAP_PROP_SATURATION)):
             ov = original.get(name)
             if ov is not None and ov >= 0:
-                cap.set(prop, ov)
+                _safe_set(cap, prop, ov)
 
         actual = dict(original)
         for name, prop in (("brightness", cv2.CAP_PROP_BRIGHTNESS),
@@ -160,10 +180,14 @@ class CameraWorker(QThread):
             if value is None or rng is None:
                 continue
             value = max(rng[0], min(rng[1], float(value)))
-            cap.set(prop, value)
-            actual[name] = cap.get(prop)
-        actual["width"] = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual["height"] = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            _safe_set(cap, prop, value)
+            gv = _safe_get(cap, prop)
+            if gv is not None:
+                actual[name] = gv
+        aw = _safe_get(cap, cv2.CAP_PROP_FRAME_WIDTH)
+        ah = _safe_get(cap, cv2.CAP_PROP_FRAME_HEIGHT)
+        actual["width"] = int(aw) if aw is not None else 0
+        actual["height"] = int(ah) if ah is not None else 0
         self.properties_ready.emit({"ranges": ranges, "actual": actual})
 
         while self._running:
