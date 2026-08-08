@@ -81,6 +81,23 @@ def list_resolutions(camera_index):
     return supported
 
 
+def _probe_range(cap, prop):
+    """探测摄像头某个属性（亮度/对比度/饱和度）的实际取值范围。"""
+    values = []
+    for v in (0, 64, 128, 192, 255):
+        cap.set(prop, v)
+        time.sleep(0.03)
+        gv = cap.get(prop)
+        if gv is not None and gv >= 0:
+            values.append(gv)
+    if len(values) < 2:
+        return None
+    lo, hi = min(values), max(values)
+    if hi - lo < 2:
+        return None
+    return lo, hi
+
+
 # ---------- 摄像头工作线程 ----------
 class CameraWorker(QThread):
     """后台线程：读取摄像头画面并做文档角点检测。"""
@@ -124,21 +141,44 @@ class CameraWorker(QThread):
         if self.resolution:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
-        if self.brightness is not None:
-            cap.set(cv2.CAP_PROP_BRIGHTNESS, self.brightness)
-        if self.contrast is not None:
-            cap.set(cv2.CAP_PROP_CONTRAST, self.contrast)
-        if self.saturation is not None:
-            cap.set(cv2.CAP_PROP_SATURATION, self.saturation)
 
-        actual = {
-            "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-            "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        # 关闭自动曝光/白平衡/对焦，避免手动参数被自动模式覆盖
+        for auto_prop in (cv2.CAP_PROP_AUTO_EXPOSURE, cv2.CAP_PROP_AUTO_WB,
+                          cv2.CAP_PROP_AUTO_FOCUS, cv2.CAP_PROP_AUTO_SHARPNESS):
+            cap.set(auto_prop, 0)
+
+        original = {
             "brightness": cap.get(cv2.CAP_PROP_BRIGHTNESS),
             "contrast": cap.get(cv2.CAP_PROP_CONTRAST),
             "saturation": cap.get(cv2.CAP_PROP_SATURATION),
         }
-        self.properties_ready.emit(actual)
+        ranges = {
+            "brightness": _probe_range(cap, cv2.CAP_PROP_BRIGHTNESS),
+            "contrast": _probe_range(cap, cv2.CAP_PROP_CONTRAST),
+            "saturation": _probe_range(cap, cv2.CAP_PROP_SATURATION),
+        }
+        # 恢复探测前的参数，避免探测过程改变画面
+        for name, prop in (("brightness", cv2.CAP_PROP_BRIGHTNESS),
+                           ("contrast", cv2.CAP_PROP_CONTRAST),
+                           ("saturation", cv2.CAP_PROP_SATURATION)):
+            ov = original.get(name)
+            if ov is not None and ov >= 0:
+                cap.set(prop, ov)
+
+        actual = dict(original)
+        for name, prop in (("brightness", cv2.CAP_PROP_BRIGHTNESS),
+                           ("contrast", cv2.CAP_PROP_CONTRAST),
+                           ("saturation", cv2.CAP_PROP_SATURATION)):
+            value = getattr(self, name)
+            rng = ranges.get(name)
+            if value is None or rng is None:
+                continue
+            value = max(rng[0], min(rng[1], float(value)))
+            cap.set(prop, value)
+            actual[name] = cap.get(prop)
+        actual["width"] = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual["height"] = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.properties_ready.emit({"ranges": ranges, "actual": actual})
 
         while self._running:
             ok, frame = cap.read()
@@ -448,6 +488,7 @@ class MainWindow(QMainWindow):
         idx = self.camera_combo.currentData()
         if idx is None or idx < 0:
             return
+        self._sliders_touched = False
         self.resolution_combo.blockSignals(True)
         self.resolution_combo.clear()
         self.resolution_combo.addItem("自动", None)
@@ -487,12 +528,18 @@ class MainWindow(QMainWindow):
     def _current_settings(self):
         idx = self.camera_combo.currentData()
         resolution = self.resolution_combo.currentData()
+        if self._sliders_touched:
+            brightness = self.brightness_slider.value()
+            contrast = self.contrast_slider.value()
+            saturation = self.saturation_slider.value()
+        else:
+            brightness = contrast = saturation = None
         return {
             "index": idx,
             "resolution": resolution,
-            "brightness": self.brightness_slider.value(),
-            "contrast": self.contrast_slider.value(),
-            "saturation": self.saturation_slider.value(),
+            "brightness": brightness,
+            "contrast": contrast,
+            "saturation": saturation,
         }
 
     def start_preview(self, idx=None):
@@ -547,16 +594,26 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "摄像头错误", msg)
 
     def on_properties_ready(self, props):
+        ranges = props.get("ranges", {})
+        actual = props.get("actual", props)
         if not self._sliders_touched:
             for name, slider in (("brightness", self.brightness_slider),
                                  ("contrast", self.contrast_slider),
                                  ("saturation", self.saturation_slider)):
-                value = props.get(name)
-                if value is not None and 0 <= value <= 255:
+                rng = ranges.get(name)
+                if rng is None:
+                    slider.setEnabled(False)
+                    slider.setToolTip("%s：该摄像头不支持此参数" % name)
+                    continue
+                slider.setEnabled(True)
+                slider.setRange(int(rng[0]), int(rng[1]))
+                slider.setToolTip("%s：%d ~ %d" % (name, int(rng[0]), int(rng[1])))
+                value = actual.get(name)
+                if value is not None:
                     slider.blockSignals(True)
-                    slider.setValue(int(value))
+                    slider.setValue(int(max(rng[0], min(rng[1], value))))
                     slider.blockSignals(False)
-        info = "%d x %d" % (props["width"], props["height"])
+        info = "%d x %d" % (actual["width"], actual["height"])
         self.statusBar().showMessage("预览中：%s（%s）" % (
             self.camera_combo.currentText(), info))
 
