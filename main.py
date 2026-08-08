@@ -142,10 +142,12 @@ class CameraWorker(QThread):
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
 
-        # 关闭自动曝光/白平衡/对焦，避免手动参数被自动模式覆盖
-        for auto_prop in (cv2.CAP_PROP_AUTO_EXPOSURE, cv2.CAP_PROP_AUTO_WB,
-                          cv2.CAP_PROP_AUTO_FOCUS, cv2.CAP_PROP_AUTO_SHARPNESS):
-            cap.set(auto_prop, 0)
+        # 关闭自动曝光/白平衡/对焦，避免手动参数被自动模式覆盖（部分 OpenCV 版本缺少 AUTO_FOCUS/AUTO_SHARPNESS）
+        for auto_name in ("CAP_PROP_AUTO_EXPOSURE", "CAP_PROP_AUTO_WB",
+                          "CAP_PROP_AUTO_FOCUS", "CAP_PROP_AUTO_SHARPNESS"):
+            auto_prop = getattr(cv2, auto_name, None)
+            if auto_prop is not None:
+                cap.set(auto_prop, 0)
 
         original = {
             "brightness": cap.get(cv2.CAP_PROP_BRIGHTNESS),
