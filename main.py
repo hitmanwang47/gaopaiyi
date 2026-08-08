@@ -20,8 +20,12 @@ from detector import crop_document, detect_document_corners, four_point_transfor
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUTPUT_DIR = os.path.join(APP_DIR, "captures")
 COMMON_RESOLUTIONS = [
-    (640, 480), (800, 600), (1024, 768), (1280, 720), (1280, 960),
-    (1600, 1200), (1920, 1080), (2560, 1440), (3840, 2160),
+    (160, 120), (320, 240), (480, 360), (640, 360), (640, 480),
+    (720, 480), (720, 576), (800, 600), (960, 540), (1024, 768),
+    (1152, 864), (1280, 720), (1280, 800), (1280, 960), (1280, 1024),
+    (1366, 768), (1440, 900), (1600, 900), (1600, 1200), (1680, 1050),
+    (1920, 1080), (1920, 1200), (2048, 1536), (2560, 1440), (3264, 2448),
+    (3840, 2160),
 ]
 
 
@@ -55,22 +59,25 @@ def list_cameras(max_index=9):
 
 
 def list_resolutions(camera_index):
-    """探测摄像头支持的常见分辨率列表。"""
+    """探测摄像头支持的常见分辨率列表（实际读帧确认生效）。"""
     supported = []
-    for w, h in COMMON_RESOLUTIONS:
-        cap = cv2.VideoCapture(camera_index, _camera_backend())
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(camera_index)
-        if not cap.isOpened():
-            continue
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-        time.sleep(0.05)
-        aw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        ah = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap = cv2.VideoCapture(camera_index, _camera_backend())
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        return supported
+    try:
+        for w, h in COMMON_RESOLUTIONS:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                continue
+            fh, fw = frame.shape[:2]
+            if (fw, fh) == (w, h) and (w, h) not in supported:
+                supported.append((w, h))
+    finally:
         cap.release()
-        if (aw, ah) == (w, h):
-            supported.append((w, h))
     return supported
 
 
@@ -365,6 +372,8 @@ class MainWindow(QMainWindow):
         grid.addWidget(QLabel("分辨率:"), 0, 0)
         self.resolution_combo = QComboBox()
         self.resolution_combo.addItem("自动", None)
+        self.resolution_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.resolution_combo.setMinimumWidth(130)
         self.resolution_combo.currentIndexChanged.connect(self.on_setting_changed)
         grid.addWidget(self.resolution_combo, 0, 1)
         grid.addWidget(QLabel("亮度:"), 0, 2)
