@@ -5,6 +5,7 @@ import sys
 import time
 
 import cv2
+os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)  # opencv-python 会劫持 Qt 插件路径，移除以免 xcb 插件加载失败
 import numpy as np
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QImage, QPixmap, QIcon

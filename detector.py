@@ -1,4 +1,4 @@
-﻿"""文档四角检测与透视裁剪模块。
+"""文档四角检测与透视裁剪模块。
 
 算法：阈值分割（Otsu / 自适应阈值）得到文档掩码，取最大连通区域，
 再经多边形逼近 / 凸包 / 最小外接矩形提取四边形；文档铺满画面时直接整幅。
@@ -55,15 +55,15 @@ def _quad_from_contour(contour, img_h, img_w, min_area):
 
 def detect_document_corners(frame, min_area_ratio=0.03, max_process_width=960):
     """
-    在画面中定位文档的四个角点。
+    ??????????????
 
-    参数:
-        frame: BGR 图像
-        min_area_ratio: 四边形最小面积占画面比例
-        max_process_width: 处理时缩放到的最大宽度（提升速度）
+    ??:
+        frame: BGR ??
+        min_area_ratio: ????????????
+        max_process_width: ?????????????????
 
-    返回:
-        排序后的 (4, 2) float32 角点数组；未检测到时返回 None
+    ??:
+        ???? (4, 2) float32 ???????????? None
     """
     h, w = frame.shape[:2]
     scale = 1.0
@@ -80,29 +80,36 @@ def detect_document_corners(frame, min_area_ratio=0.03, max_process_width=960):
     kernel7 = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
     kernel5 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
 
-    best = None
+    # HSV ??????????????????????????/????
+    hsv = cv2.cvtColor(work, cv2.COLOR_BGR2HSV)
+    sat = hsv[:, :, 1]
+    val = hsv[:, :, 2]
+    sat_blur = cv2.GaussianBlur(sat, (5, 5), 0)
+
+    best_gray = None      # ??????????
+    best_color = None     # ??????????
     full_frame_seen = False
     all_contours = []
 
-    def consider(contour, allow_full=False):
-        nonlocal best, full_frame_seen
+    def consider(contour, color=False):
+        nonlocal best_gray, best_color, full_frame_seen
         x, y, cw, ch = cv2.boundingRect(contour)
         area = cv2.contourArea(contour)
-        is_full = cw >= 0.97 * img_w and ch >= 0.97 * img_h
-        if is_full:
+        # ??????????????/????????????
+        if cw >= 0.97 * img_w or ch >= 0.97 * img_h:
             full_frame_seen = True
-            if not allow_full:
-                return
-            pts = np.float32([[0, 0], [img_w - 1, 0],
-                              [img_w - 1, img_h - 1], [0, img_h - 1]])
-            if best is None or area > best[0]:
-                best = (area, pts)
             return
         res = _quad_from_contour(contour, img_h, img_w, min_area)
-        if res and (best is None or res[0] > best[0]):
-            best = (res[0], res[1])
+        if not res:
+            return
+        if color:
+            if best_color is None or res[0] > best_color[0]:
+                best_color = (res[0], res[1])
+        else:
+            if best_gray is None or res[0] > best_gray[0]:
+                best_gray = (res[0], res[1])
 
-    # 阈值分割管线（含内部孔洞，兼容“白底上放文档”的拍摄）
+    # ???????????????????????????
     otsu = cv2.threshold(blur, 0, 255,
                          cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
     adaptive = cv2.adaptiveThreshold(blur, 255,
@@ -123,7 +130,7 @@ def detect_document_corners(frame, min_area_ratio=0.03, max_process_width=960):
         for c in sorted(inner, key=cv2.contourArea, reverse=True)[:4]:
             consider(c)
 
-    # Canny 边缘管线（处理纹理复杂的背景）
+    # Canny ???????????????
     edged = cv2.Canny(blur, 75, 200)
     edged = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel5)
     contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL,
@@ -133,13 +140,43 @@ def detect_document_corners(frame, min_area_ratio=0.03, max_process_width=960):
         for c in sorted(contours, key=cv2.contourArea, reverse=True)[:4]:
             consider(c)
 
-    # 文档铺满画面时直接使用整幅
+    # ???? 1?????????? + ??????????????
+    _, sat_low = cv2.threshold(sat_blur, 70, 255, cv2.THRESH_BINARY_INV)
+    _, val_high = cv2.threshold(val, 120, 255, cv2.THRESH_BINARY)
+    white_mask = cv2.bitwise_and(sat_low, val_high)
+    white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel7)
+    contours, hierarchy = cv2.findContours(white_mask, cv2.RETR_CCOMP,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+    if hierarchy is not None:
+        hierarchy = hierarchy[0]
+        outer = [c for i, c in enumerate(contours) if hierarchy[i][3] == -1]
+        all_contours.extend(outer)
+        for c in sorted(outer, key=cv2.contourArea, reverse=True)[:4]:
+            consider(c, color=True)
+
+    # ???? 2??????????????????????
+    edged_sat = cv2.Canny(sat_blur, 40, 120)
+    edged_sat = cv2.morphologyEx(edged_sat, cv2.MORPH_CLOSE, kernel5)
+    contours, _ = cv2.findContours(edged_sat, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        all_contours.extend(contours)
+        for c in sorted(contours, key=cv2.contourArea, reverse=True)[:4]:
+            consider(c, color=True)
+
+    # ??????????????????????????
+    if best_color is not None and best_gray is None:
+        best = best_color
+    else:
+        best = best_gray
+
+    # ?????????????
     if best is None and full_frame_seen:
         best = (img_w * img_h,
                 np.float32([[0, 0], [img_w - 1, 0],
                             [img_w - 1, img_h - 1], [0, img_h - 1]]))
 
-    # 终极兜底：最大轮廓的最小外接矩形（适合固定俯拍）
+    # ????????????????????????
     if best is None and all_contours:
         largest = max(all_contours, key=cv2.contourArea)
         box = cv2.boxPoints(cv2.minAreaRect(largest))
