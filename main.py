@@ -6,6 +6,7 @@ import sys
 import time
 
 import cv2
+os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)  # opencv-python ??? Qt ????????? xcb ??????
 import numpy as np
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QImage, QPixmap, QIcon
@@ -45,7 +46,7 @@ def _open_with_default_app(path):
 
 
 # ---------- 摄像头枚举 ----------
-def list_cameras(max_index=9):
+def list_cameras(max_index=15):
     """探测可用摄像头，返回 [(索引, 显示名)]。"""
     available = []
     for i in range(max_index + 1):
