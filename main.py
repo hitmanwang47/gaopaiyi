@@ -31,8 +31,37 @@ COMMON_RESOLUTIONS = [
 
 
 def _camera_backend():
-    """Windows 用 DirectShow，Linux/macOS 用系统默认后端。"""
-    return cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
+    """Windows 用 DirectShow，Linux/macOS 用 V4L2，避免 FFMPEG 后端误开无效节点。"""
+    return cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_V4L2
+
+
+def _linux_video_indices(max_index):
+    """列出 Linux 上真实存在的 /dev/videoN 索引，避免逐一探测不存在的节点。"""
+    indices = []
+    try:
+        names = os.listdir("/sys/class/video4linux")
+    except OSError:
+        names = []
+    for name in names:
+        suffix = name[len("video"):] if name.startswith("video") else ""
+        if suffix.isdigit():
+            idx = int(suffix)
+            if 0 <= idx <= max_index:
+                indices.append(idx)
+    return sorted(indices) if indices else list(range(max_index + 1))
+
+
+def _open_camera(camera_index, timeout_ms=1500):
+    """按平台打开摄像头；Linux 固定 V4L2，并设置读取超时避免抓帧无限阻塞。"""
+    cap = cv2.VideoCapture(camera_index, _camera_backend())
+    if not cap.isOpened() and os.name == "nt":
+        cap.release()
+        cap = cv2.VideoCapture(camera_index)
+    if cap.isOpened() and timeout_ms:
+        prop = getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", None)
+        if prop is not None:
+            _safe_set(cap, prop, timeout_ms)
+    return cap
 
 
 def _open_with_default_app(path):
@@ -47,24 +76,35 @@ def _open_with_default_app(path):
 
 # ---------- 摄像头枚举 ----------
 def list_cameras(max_index=15):
-    """探测可用摄像头，返回 [(索引, 显示名)]。"""
+    """探测可用摄像头，返回 [(索引, 显示名)]。仅保留能实际输出画面的设备。"""
+    if sys.platform.startswith("linux"):
+        indices = _linux_video_indices(max_index)
+    else:
+        indices = list(range(max_index + 1))
     available = []
-    for i in range(max_index + 1):
-        cap = cv2.VideoCapture(i, _camera_backend())
+    for i in indices:
+        cap = _open_camera(i)
         if not cap.isOpened():
-            cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            available.append((i, "摄像头 %d" % (i + 1)))
             cap.release()
+            continue
+        ok = False
+        try:
+            for _ in range(3):
+                if cap.grab():
+                    ok = True
+                    break
+        except cv2.error:
+            pass
+        if ok:
+            available.append((i, "摄像头 %d" % (i + 1)))
+        cap.release()
     return available
 
 
 def list_resolutions(camera_index):
     """探测摄像头支持的常见分辨率列表（实际读帧确认生效）。"""
     supported = []
-    cap = cv2.VideoCapture(camera_index, _camera_backend())
-    if not cap.isOpened():
-        cap = cv2.VideoCapture(camera_index)
+    cap = _open_camera(camera_index)
     if not cap.isOpened():
         return supported
     try:
@@ -153,11 +193,23 @@ class CameraWorker(QThread):
         return dist < 0.06 and ratio < 1.6
 
     def run(self):
-        cap = cv2.VideoCapture(self.camera_index, _camera_backend())
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(self.camera_index)
+        cap = _open_camera(self.camera_index)
         if not cap.isOpened():
             self.camera_error.emit("无法打开摄像头（索引 %d）" % self.camera_index)
+            return
+        # 打开后先实际抓帧，确认该节点能输出画面（Linux 上部分无效节点可打开但无数据）
+        grabbed = False
+        try:
+            for _ in range(5):
+                if cap.grab():
+                    grabbed = True
+                    break
+                time.sleep(0.05)
+        except cv2.error:
+            pass
+        if not grabbed:
+            self.camera_error.emit("无法从摄像头获取画面（索引 %d）" % self.camera_index)
+            cap.release()
             return
         if self.resolution:
             _safe_set(cap, cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
@@ -207,10 +259,16 @@ class CameraWorker(QThread):
         actual["height"] = int(ah) if ah is not None else 0
         self.properties_ready.emit({"ranges": ranges, "actual": actual})
 
+        failed = 0
         while self._running:
             ok, frame = cap.read()
             if not ok:
+                failed += 1
+                if failed > 20:
+                    self.camera_error.emit("摄像头画面中断（索引 %d）" % self.camera_index)
+                    break
                 continue
+            failed = 0
             corners = detect_document_corners(frame)
             if corners is not None:
                 if (self.last_good is not None
